@@ -1,0 +1,441 @@
+import React, { useState, useEffect } from "react";
+import { ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
+
+const todayKey = () => new Date().toISOString().slice(0, 10);
+const fmt = (k) =>
+  new Date(k + "T00:00:00").toLocaleDateString(undefined, { day: "numeric", month: "short" });
+const fmtFull = (k) =>
+  new Date(k + "T00:00:00").toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short" });
+
+const CHECKS = [
+  { id: "newspaper", label: "Read the newspaper" },
+  { id: "answer", label: "Wrote at least one answer" },
+  { id: "revision", label: "Revised old notes" },
+  { id: "optional", label: "Did Civil Engg optional" },
+];
+
+const blank = (date) => ({
+  date, target: "", time: "", done: false, hardest: false, hardship: false,
+  hours: "", checks: {}, avoided: "", redTeam: "", tasks: [],
+});
+
+async function loadAll() {
+  try {
+    const res = await window.storage.list("entry:");
+    const keys = res?.keys || [];
+    const out = {};
+    for (const k of keys) {
+      try {
+        const r = await window.storage.get(k);
+        if (r) { const v = JSON.parse(r.value); out[v.date] = { ...blank(v.date), ...v }; }
+      } catch (e) {}
+    }
+    return out;
+  } catch (e) { return {}; }
+}
+async function saveEntry(e) {
+  try { await window.storage.set("entry:" + e.date, JSON.stringify(e)); } catch (err) {}
+}
+
+// Seed random demo data for the past 7 days (runs once)
+async function seedDemo() {
+  try {
+    const flag = await window.storage.get("seeded_v3").catch(() => null);
+    if (flag) return null;
+  } catch (e) {}
+  const rnd = (a, b) => a + Math.random() * (b - a);
+  const chance = (p) => Math.random() < p;
+  const targets = [
+    "Write full GS4 case study, no notes",
+    "Solve Hardy-Cross pipe network problem",
+    "Revise Gupta Empire — full lesson",
+    "Essay: cinematic hook + 3 body sections",
+    "Concrete Technology — IS code mapping",
+    "Climate Change data bank — 20 stats recall",
+    "Polity revision, 7th pass",
+  ];
+  const seeded = {};
+  for (let i = 7; i >= 0; i--) {
+    const d = new Date(); d.setDate(d.getDate() - i);
+    const k = d.toISOString().slice(0, 10);
+    const isToday = i === 0;
+    const checks = {};
+    CHECKS.forEach((c) => { checks[c.id] = isToday ? false : chance(0.7); });
+    const hardest = isToday ? false : chance(0.6);
+    const tcount = 1 + Math.floor(Math.random() * 3);
+    const tasks = [];
+    for (let t = 0; t < tcount; t++) {
+      tasks.push({
+        target: targets[(7 - i + t) % targets.length],
+        time: ["06:30", "07:00", "05:45", "09:00", "14:00", "18:00"][Math.floor(Math.random() * 6)],
+        done: isToday ? false : chance(0.7),
+      });
+    }
+    const e = {
+      ...blank(k),
+      tasks,
+      done: isToday ? false : chance(0.75),
+      hardest,
+      hardship: isToday ? false : chance(0.65),
+      hours: isToday ? "" : rnd(3.5, 10).toFixed(1),
+      checks,
+      avoided: (isToday || hardest) ? "" : ["Answer writing — feared it'd be mediocre",
+        "Optional numericals, kept pushing to 'later'",
+        "Revision of weak polity topics"][Math.floor(Math.random() * 3)],
+      redTeam: (!isToday && chance(0.5)) ? "Phone in other room next morning" : "",
+    };
+    await saveEntry(e);
+    seeded[k] = e;
+  }
+  try { await window.storage.set("seeded_v3", "true"); } catch (e) {}
+  return seeded;
+}
+
+const C = {
+  bg: "#f6f5f1", card: "#ffffff", line: "#e3e0d8", ink: "#23211c",
+  dim: "#8a857a", gold: "#a8862f", red: "#c0563f", green: "#3f9d5f",
+};
+const box = {
+  background: C.card, border: `1px solid ${C.line}`, borderRadius: 12,
+  padding: 18, marginBottom: 14, boxShadow: "0 1px 2px rgba(0,0,0,0.04)",
+};
+const input = {
+  width: "100%", background: "#fbfaf7", border: `1px solid ${C.line}`,
+  borderRadius: 8, color: C.ink, padding: "10px 12px", fontSize: 14,
+  fontFamily: "inherit", boxSizing: "border-box", marginTop: 6,
+};
+const btn = (active) => ({
+  background: active ? C.gold : "transparent",
+  color: active ? "#fff" : C.ink, border: `1px solid ${active ? C.gold : C.line}`,
+  borderRadius: 8, padding: "9px 16px", fontSize: 13, fontWeight: 600, cursor: "pointer",
+});
+
+function Toggle({ on, set, label, sub }) {
+  return (
+    <div onClick={() => set(!on)}
+      style={{ display: "flex", alignItems: "center", gap: 12, cursor: "pointer", padding: "8px 0" }}>
+      <div style={{
+        width: 22, height: 22, borderRadius: 6, flexShrink: 0,
+        border: `2px solid ${on ? C.green : C.line}`,
+        background: on ? C.green : "transparent",
+        display: "flex", alignItems: "center", justifyContent: "center",
+        color: "#fff", fontSize: 14, fontWeight: 800,
+      }}>{on ? "✓" : ""}</div>
+      <div>
+        <div style={{ color: C.ink, fontSize: 14, fontWeight: 600 }}>{label}</div>
+        {sub && <div style={{ color: C.dim, fontSize: 12 }}>{sub}</div>}
+      </div>
+    </div>
+  );
+}
+
+function Tab({ id, active, set, children }) {
+  const on = active === id;
+  return (
+    <button onClick={() => set(id)} style={{
+      flex: 1, padding: "10px 4px", fontSize: 13, fontWeight: 600, cursor: "pointer",
+      background: on ? C.card : "transparent", color: on ? C.gold : C.dim,
+      border: "none", borderBottom: `2px solid ${on ? C.gold : "transparent"}`,
+    }}>{children}</button>
+  );
+}
+
+export default function App() {
+  const [entries, setEntries] = useState({});
+  const [loaded, setLoaded] = useState(false);
+  const [tab, setTab] = useState("today");
+  const [tItems, setItems] = useState([{ target: "", time: "" }]);
+  const [daySubmitted, setDaySubmitted] = useState(false);
+  const [tk, setTk] = useState(todayKey());
+
+  useEffect(() => {
+    seedDemo().then(() => loadAll()).then((all) => { setEntries(all); setLoaded(true); });
+  }, []);
+
+  const shiftDay = (n) => { const d = new Date(tk + "T00:00:00"); d.setDate(d.getDate() + n); setTk(d.toISOString().slice(0, 10)); };
+  const isRealToday = tk === todayKey();
+  const today = entries[tk] || blank(tk);
+
+  const update = (patch) => {
+    const next = { ...today, ...patch };
+    setEntries((p) => ({ ...p, [tk]: next }));
+    saveEntry(next);
+  };
+  const toggleCheck = (id) => update({ checks: { ...today.checks, [id]: !today.checks?.[id] } });
+
+  const getTasks = (e) => {
+    if (e.tasks && e.tasks.length) return e.tasks;
+    if (e.target) return [{ target: e.target, time: e.time, done: e.done }];
+    return [];
+  };
+
+  const setTomorrow = () => {
+    const clean = tItems.filter((it) => it.target.trim())
+      .map((it) => ({ target: it.target.trim(), time: it.time.trim(), done: false }));
+    if (!clean.length) return;
+    const d = new Date(); d.setDate(d.getDate() + 1);
+    const k = d.toISOString().slice(0, 10);
+    const e = { ...blank(k), tasks: clean };
+    setEntries((p) => ({ ...p, [k]: e }));
+    saveEntry(e);
+    setItems([{ target: "", time: "" }]);
+  };
+
+  const sorted = Object.values(entries).sort((a, b) => a.date.localeCompare(b.date));
+  const hardestCount = sorted.filter((e) => e.hardest).length;
+  const total = sorted.filter((e) => getTasks(e).length).length;
+  const totalHours = sorted.reduce((s, e) => s + (parseFloat(e.hours) || 0), 0);
+
+  // chart data: daily hours + 7-day rolling average
+  const chartData = sorted.map((e, i) => {
+    const window7 = sorted.slice(Math.max(0, i - 6), i + 1);
+    const avg = window7.reduce((s, x) => s + (parseFloat(x.hours) || 0), 0) / window7.length;
+    return { date: fmt(e.date), hrs: parseFloat(e.hours) || 0, avg: Math.round(avg * 10) / 10 };
+  });
+
+  // misses: any check left undone, debt unpaid, hard thing not done
+  const misses = sorted
+    .filter((e) => e.date < tk || e.date === tk)
+    .map((e) => {
+      const m = [];
+      CHECKS.forEach((c) => { if (!e.checks?.[c.id]) m.push(c.label); });
+      getTasks(e).forEach((t) => { if (!t.done) m.push("Debt unpaid: " + t.target); });
+      if (!e.hardest) m.push("Skipped the hard thing");
+      if (!e.hardship) m.push("No voluntary hardship");
+      return { date: e.date, misses: m, avoided: e.avoided };
+    })
+    .filter((x) => x.misses.length || x.avoided)
+    .sort((a, b) => b.date.localeCompare(a.date));
+
+  if (!loaded)
+    return <div style={{ color: C.dim, padding: 24, fontFamily: "system-ui" }}>Loading…</div>;
+
+  const wrap = {
+    background: C.bg, color: C.ink, minHeight: "100%", padding: "0 0 22px",
+    fontFamily: "system-ui, -apple-system, sans-serif", maxWidth: 640, margin: "0 auto",
+  };
+  const pad = { padding: "0 18px" };
+
+  return (
+    <div style={wrap}>
+      <div style={{ ...pad, paddingTop: 20, marginBottom: 12 }}>
+        <div style={{ letterSpacing: 3, color: C.gold, fontSize: 11, fontWeight: 700 }}>BABA YAGA</div>
+        <div style={{ fontSize: 19, fontWeight: 700, marginTop: 4, lineHeight: 1.3 }}>
+          “I do what needs to be done, regardless of how I feel.”
+        </div>
+      </div>
+
+      <div style={{ display: "flex", borderBottom: `1px solid ${C.line}`, marginBottom: 14, position: "sticky", top: 0, background: C.bg, zIndex: 5 }}>
+        <Tab id="today" active={tab} set={setTab}>Today</Tab>
+        <Tab id="stats" active={tab} set={setTab}>Stats</Tab>
+        <Tab id="misses" active={tab} set={setTab}>Misses</Tab>
+      </div>
+
+      {tab === "today" && (
+        <div style={pad}>
+          <div style={{ ...box, display: "flex", gap: 24, flexWrap: "wrap" }}>
+            <div><div style={{ fontSize: 24, fontWeight: 800, color: C.green }}>{hardestCount}</div>
+              <div style={{ color: C.dim, fontSize: 12 }}>hard things done</div></div>
+            <div><div style={{ fontSize: 24, fontWeight: 800 }}>{total}</div>
+              <div style={{ color: C.dim, fontSize: 12 }}>days logged</div></div>
+            <div><div style={{ fontSize: 24, fontWeight: 800, color: C.gold }}>
+              {total ? Math.round((hardestCount / total) * 100) : 0}%</div>
+              <div style={{ color: C.dim, fontSize: 12 }}>hit rate</div></div>
+            <div><div style={{ fontSize: 24, fontWeight: 800 }}>{totalHours.toFixed(1)}</div>
+              <div style={{ color: C.dim, fontSize: 12 }}>total hrs</div></div>
+          </div>
+
+          <div style={{ ...box, display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 14px" }}>
+            <button onClick={() => shiftDay(-1)} style={{ ...btn(false), padding: "6px 14px" }}>‹ Prev</button>
+            <div style={{ textAlign: "center" }}>
+              <div style={{ fontSize: 14, fontWeight: 700 }}>{fmtFull(tk)}</div>
+              {!isRealToday && <div onClick={() => setTk(todayKey())} style={{ fontSize: 11, color: C.gold, cursor: "pointer" }}>tap to jump to today</div>}
+              {isRealToday && <div style={{ fontSize: 11, color: C.dim }}>logging today</div>}
+            </div>
+            <button onClick={() => shiftDay(1)} disabled={isRealToday} style={{ ...btn(false), padding: "6px 14px", opacity: isRealToday ? 0.35 : 1, cursor: isRealToday ? "default" : "pointer" }}>Next ›</button>
+          </div>
+
+          <div style={box}>
+            <div style={{ fontSize: 13, color: C.gold, fontWeight: 700, marginBottom: 8 }}>
+              {isRealToday ? "TODAY" : "LOGGING"} — {fmtFull(tk)}</div>
+            {getTasks(today).length ? (
+              <>
+                <div style={{ fontSize: 12, color: C.dim, marginBottom: 4 }}>
+                  The debts you owe today</div>
+                {getTasks(today).map((t, idx) => (
+                  <div key={idx} onClick={() => {
+                    const nt = getTasks(today).map((x, j) => j === idx ? { ...x, done: !x.done } : x);
+                    update({ tasks: nt });
+                  }} style={{ display: "flex", alignItems: "center", gap: 12, cursor: "pointer", padding: "6px 0" }}>
+                    <div style={{
+                      width: 22, height: 22, borderRadius: 6, flexShrink: 0,
+                      border: `2px solid ${t.done ? C.green : C.line}`,
+                      background: t.done ? C.green : "transparent",
+                      display: "flex", alignItems: "center", justifyContent: "center",
+                      color: "#fff", fontSize: 14, fontWeight: 800,
+                    }}>{t.done ? "✓" : ""}</div>
+                    <div>
+                      <div style={{ fontSize: 15, fontWeight: 600,
+                        textDecoration: t.done ? "line-through" : "none",
+                        color: t.done ? C.dim : C.ink }}>{t.target}</div>
+                      {t.time && <div style={{ color: C.dim, fontSize: 12 }}>⏰ {t.time}</div>}
+                    </div>
+                  </div>
+                ))}
+                <div style={{ height: 8, borderTop: `1px solid ${C.line}`, marginTop: 8 }} />
+                <Toggle on={today.hardest} set={(v) => update({ hardest: v })}
+                  label="Did the thing I least wanted, most needed" sub="the only metric that matters" />
+                <Toggle on={today.hardship} set={(v) => update({ hardship: v })}
+                  label="Daily voluntary hardship" sub="stairs · cold finish · one extra answer" />
+              </>
+            ) : (
+              <div style={{ color: C.dim, fontSize: 14 }}>
+                No target was set last night. Set tomorrow's below so future-you wakes with the debate already settled.
+              </div>
+            )}
+          </div>
+
+          <div style={box}>
+            <div style={{ fontSize: 13, color: C.gold, fontWeight: 700, marginBottom: 4 }}>DAILY CHECKLIST</div>
+            {CHECKS.map((c) => (
+              <Toggle key={c.id} on={!!today.checks?.[c.id]} set={() => toggleCheck(c.id)} label={c.label} />
+            ))}
+            <div style={{ marginTop: 10 }}>
+              <div style={{ color: C.dim, fontSize: 12 }}>Hours studied today</div>
+              <input style={{ ...input, maxWidth: 140 }} type="number" min="0" step="0.5"
+                value={today.hours} onChange={(e) => update({ hours: e.target.value })} placeholder="e.g. 8.5" />
+            </div>
+          </div>
+
+          <div style={box}>
+            <div style={{ fontSize: 13, color: C.gold, fontWeight: 700, marginBottom: 6 }}>NIGHTLY REFLECTION</div>
+            <div style={{ color: C.dim, fontSize: 12 }}>What did I avoid today?</div>
+            <textarea style={{ ...input, minHeight: 46 }} value={today.avoided}
+              onChange={(e) => update({ avoided: e.target.value })}
+              placeholder="Name the flinch — the real reason, not 'I was tired'." />
+            <div style={{ marginTop: 8, color: C.dim, fontSize: 12 }}>
+              Red-team: where did friction slow me, and the bypass for tomorrow?</div>
+            <textarea style={{ ...input, minHeight: 46 }} value={today.redTeam}
+              onChange={(e) => update({ redTeam: e.target.value })}
+              placeholder="Make it logistically harder to fail than to succeed." />
+          </div>
+
+          <div style={{ ...box, borderColor: C.gold }}>
+            <div style={{ fontSize: 13, color: C.gold, fontWeight: 700, marginBottom: 4 }}>SET TOMORROW'S DEBT</div>
+            <div style={{ color: C.dim, fontSize: 12, marginBottom: 6 }}>
+              The uncomfortable things that move the goal most. Add as many as you'll actually do.</div>
+            {tItems.map((it, idx) => (
+              <div key={idx} style={{ display: "flex", gap: 8, alignItems: "flex-start", marginTop: idx ? 8 : 0 }}>
+                <div style={{ flex: 1 }}>
+                  <input style={{ ...input, marginTop: 0 }} value={it.target}
+                    onChange={(e) => setItems(tItems.map((x, j) => j === idx ? { ...x, target: e.target.value } : x))}
+                    placeholder={idx === 0 ? "e.g. Write full GS4 case study, no notes" : "Another task…"} />
+                  <input style={{ ...input, marginTop: 6 }} value={it.time}
+                    onChange={(e) => setItems(tItems.map((x, j) => j === idx ? { ...x, time: e.target.value } : x))}
+                    placeholder="Exact time — e.g. 06:30" />
+                </div>
+                {tItems.length > 1 && (
+                  <button onClick={() => setItems(tItems.filter((_, j) => j !== idx))}
+                    style={{ background: "transparent", border: `1px solid ${C.line}`, color: C.red,
+                      borderRadius: 8, width: 38, height: 38, fontSize: 18, cursor: "pointer", flexShrink: 0 }}>×</button>
+                )}
+              </div>
+            ))}
+            <div style={{ marginTop: 12, display: "flex", gap: 10 }}>
+              <button style={btn(false)} onClick={() => setItems([...tItems, { target: "", time: "" }])}>+ Add task</button>
+              <button style={btn(true)} onClick={setTomorrow}>Lock it in</button>
+            </div>
+          </div>
+
+          <div style={{ marginBottom: 20 }}>
+            <button
+              onClick={() => {
+                saveEntry(today);
+                setDaySubmitted(true);
+                setTimeout(() => setDaySubmitted(false), 2500);
+              }}
+              style={{
+                width: "100%", padding: "14px", fontSize: 15, fontWeight: 700,
+                borderRadius: 12, cursor: "pointer", border: "none",
+                background: daySubmitted ? C.green : C.ink, color: "#fff",
+              }}>
+              {daySubmitted ? "✓ Day logged — rest now" : "Call it a day"}
+            </button>
+            <div style={{ color: C.dim, fontSize: 11, textAlign: "center", marginTop: 6 }}>
+              Everything auto-saves, but tap this to close the day with intent.
+            </div>
+          </div>
+        </div>
+      )}
+
+      {tab === "stats" && (
+        <div style={pad}>
+          <div style={box}>
+            <div style={{ fontSize: 13, color: C.gold, fontWeight: 700, marginBottom: 4 }}>
+              STUDY HOURS</div>
+            <div style={{ color: C.dim, fontSize: 12, marginBottom: 10 }}>
+              Bars = hours per day · Line = 7-day rolling average</div>
+            {chartData.length === 0 ? (
+              <div style={{ color: C.dim, fontSize: 14, padding: "20px 0" }}>
+                Log some study hours and they'll show up here.</div>
+            ) : (
+              <ResponsiveContainer width="100%" height={300}>
+                <ComposedChart data={chartData} margin={{ top: 6, right: 6, left: -18, bottom: 0 }}>
+                  <CartesianGrid stroke={C.line} vertical={false} />
+                  <XAxis dataKey="date" tick={{ fontSize: 11, fill: C.dim }} interval="preserveStartEnd" />
+                  <YAxis tick={{ fontSize: 11, fill: C.dim }} />
+                  <Tooltip contentStyle={{ borderRadius: 8, border: `1px solid ${C.line}`, fontSize: 12 }} />
+                  <Bar dataKey="hrs" name="Hours" fill={C.gold} radius={[4, 4, 0, 0]} barSize={18} />
+                  <Line dataKey="avg" name="7-day avg" stroke={C.green} strokeWidth={2.5} dot={false} />
+                </ComposedChart>
+              </ResponsiveContainer>
+            )}
+          </div>
+          <div style={{ ...box, display: "flex", gap: 24, flexWrap: "wrap" }}>
+            <div><div style={{ fontSize: 24, fontWeight: 800, color: C.gold }}>{totalHours.toFixed(1)}</div>
+              <div style={{ color: C.dim, fontSize: 12 }}>total hours</div></div>
+            <div><div style={{ fontSize: 24, fontWeight: 800 }}>
+              {chartData.length ? (totalHours / chartData.length).toFixed(1) : 0}</div>
+              <div style={{ color: C.dim, fontSize: 12 }}>daily avg (all)</div></div>
+            <div><div style={{ fontSize: 24, fontWeight: 800, color: C.green }}>
+              {chartData.length ? chartData[chartData.length - 1].avg : 0}</div>
+              <div style={{ color: C.dim, fontSize: 12 }}>current 7-day avg</div></div>
+          </div>
+        </div>
+      )}
+
+      {tab === "misses" && (
+        <div style={pad}>
+          {misses.length === 0 ? (
+            <div style={{ ...box, color: C.dim, fontSize: 14 }}>
+              Nothing logged as missed yet. Clean slate.</div>
+          ) : (
+            misses.map((d) => (
+              <div key={d.date} style={box}>
+                <div style={{ fontSize: 13, color: C.gold, fontWeight: 700, marginBottom: 8 }}>
+                  {fmtFull(d.date)}</div>
+                {d.misses.map((m, i) => (
+                  <div key={i} style={{ display: "flex", gap: 8, alignItems: "flex-start", padding: "3px 0" }}>
+                    <span style={{ color: C.red, fontWeight: 800, fontSize: 14 }}>✕</span>
+                    <span style={{ fontSize: 13 }}>{m}</span>
+                  </div>
+                ))}
+                {d.avoided && (
+                  <div style={{ marginTop: 8, padding: "8px 10px", background: "#fbfaf7",
+                    borderRadius: 8, fontSize: 13, color: C.ink, borderLeft: `3px solid ${C.red}` }}>
+                    <span style={{ color: C.dim, fontSize: 11, fontWeight: 700 }}>AVOIDED · </span>
+                    {d.avoided}
+                  </div>
+                )}
+              </div>
+            ))
+          )}
+        </div>
+      )}
+
+      <div style={{ ...pad, color: C.dim, fontSize: 11, textAlign: "center", marginTop: 6 }}>
+        Relentlessness is not intensity. It is moving when nothing feels rewarding.
+      </div>
+    </div>
+  );
+}
