@@ -344,6 +344,111 @@ function render(){
       statBlock(chartData.length?(totalHours/chartData.length).toFixed(1):0,"daily avg"),
       statBlock(chartData.length?chartData[chartData.length-1].avg:0,"current 7-day avg",C.green)
     ]));
+
+    // ---- Streak stats (consecutive most-recent days with hard thing done) ----
+    var byDateDesc = sorted.slice().sort(function(a,b){return b.date.localeCompare(a.date);});
+    var curStreak=0;
+    for(var s=0;s<byDateDesc.length;s++){ if(byDateDesc[s].hardest) curStreak++; else break; }
+    var longest=0, run=0;
+    sorted.forEach(function(e){ if(e.hardest){ run++; longest=Math.max(longest,run);} else run=0; });
+    pad.appendChild(el("div",{display:"flex",gap:"8px",marginBottom:"14px",flexWrap:"wrap"},[
+      statBlock(curStreak,"current streak",curStreak>0?C.green:C.dim),
+      statBlock(longest,"longest streak",C.gold),
+      statBlock(sorted.reduce(function(s,e){return s+(parseFloat(e.hours)||0)>=6?s+1:s;},0),"days ≥ 6 hrs")
+    ]));
+
+    // ---- Discipline: completion % per habit (horizontal bars) ----
+    var dbar=el("div", box); dbar.className="card rise";
+    dbar.appendChild(el("div",{fontFamily:"'Oswald',sans-serif",fontSize:"13px",color:C.gold,fontWeight:"600",letterSpacing:"1.5px",marginBottom:"4px"},"DISCIPLINE"));
+    dbar.appendChild(el("div",{color:C.dim,fontSize:"12px",marginBottom:"12px"},"Share of logged days each habit was done"));
+    var habits=[
+      ["Newspaper", function(e){return e.checks.newspaper;}],
+      ["Answer written", function(e){return e.checks.answer;}],
+      ["Revision", function(e){return e.checks.revision;}],
+      ["CE optional", function(e){return e.checks.optional;}],
+      ["Hard thing", function(e){return e.hardest;}],
+      ["Voluntary hardship", function(e){return e.hardship;}]
+    ];
+    var n2=sorted.length||1;
+    habits.forEach(function(hb){
+      var done=sorted.filter(hb[1]).length;
+      var pct=Math.round(done/n2*100);
+      var col = pct>=70?C.green : pct>=40?C.gold : C.red;
+      var rowEl=el("div",{marginBottom:"10px"});
+      rowEl.appendChild(el("div",{display:"flex",justifyContent:"space-between",fontSize:"12.5px",marginBottom:"4px"},[
+        el("span",{color:C.ink},hb[0]),
+        el("span",{fontFamily:"'Oswald',sans-serif",color:col,fontWeight:"600"},pct+"%")
+      ]));
+      var track=el("div",{height:"7px",background:"#0e0e12",borderRadius:"5px",overflow:"hidden"});
+      var fill=el("div",{height:"100%",width:pct+"%",background:col,borderRadius:"5px",transition:"width .5s ease"});
+      track.appendChild(fill); rowEl.appendChild(track);
+      dbar.appendChild(rowEl);
+    });
+    pad.appendChild(dbar);
+
+    // ---- Consistency: last 14 days heat row ----
+    var hbox=el("div", box); hbox.className="card rise";
+    hbox.appendChild(el("div",{fontFamily:"'Oswald',sans-serif",fontSize:"13px",color:C.gold,fontWeight:"600",letterSpacing:"1.5px",marginBottom:"4px"},"LAST 14 DAYS"));
+    hbox.appendChild(el("div",{color:C.dim,fontSize:"12px",marginBottom:"12px"},"Brighter = more hours · gold ring = hard thing done"));
+    var emap={}; sorted.forEach(function(e){ emap[e.date]=e; });
+    var rowH=el("div",{display:"flex",gap:"5px",flexWrap:"wrap"});
+    for(var i=13;i>=0;i--){
+      var dk=dayShiftKey(todayKey(), -i);
+      var e=emap[dk];
+      var hrs=e?(parseFloat(e.hours)||0):0;
+      var intensity = hrs<=0?0.08 : Math.min(1, 0.25 + hrs/10);
+      var cell=el("div",{ width:"26px", height:"30px", borderRadius:"5px",
+        background:"rgba(242,194,0,"+intensity+")",
+        border:(e&&e.hardest)?"2px solid "+C.gold:"1px solid "+C.line,
+        display:"flex", alignItems:"flex-end", justifyContent:"center", paddingBottom:"2px" },
+        el("span",{fontSize:"8px",color:hrs>5?"#1a1500":C.dim}, dk.slice(8)));
+      cell.title = e ? (fmtFull(dk)+" — "+(hrs||0)+"h") : (fmtFull(dk)+" — no log");
+      rowH.appendChild(cell);
+    }
+    hbox.appendChild(rowH);
+    pad.appendChild(hbox);
+
+    // ---- Weekday pattern: avg hours + weakest habit per weekday ----
+    var wbox=el("div", box); wbox.className="card rise";
+    wbox.appendChild(el("div",{fontFamily:"'Oswald',sans-serif",fontSize:"13px",color:C.gold,fontWeight:"600",letterSpacing:"1.5px",marginBottom:"4px"},"WEEKDAY PATTERN"));
+    wbox.appendChild(el("div",{color:C.dim,fontSize:"12px",marginBottom:"12px"},"Where your week is strong — and where it leaks"));
+    var WD=["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+    var habitDefs=[
+      ["newspaper", function(e){return e.checks.newspaper;}],
+      ["answer", function(e){return e.checks.answer;}],
+      ["revision", function(e){return e.checks.revision;}],
+      ["CE optional", function(e){return e.checks.optional;}],
+      ["hard thing", function(e){return e.hardest;}],
+      ["hardship", function(e){return e.hardship;}]
+    ];
+    // bucket entries by weekday
+    var buckets=[[],[],[],[],[],[],[]];
+    sorted.forEach(function(e){ var d=new Date(e.date+"T00:00:00"); if(!isNaN(d)) buckets[d.getDay()].push(e); });
+    var maxAvg=0;
+    var wdAvg=buckets.map(function(arr){ if(!arr.length) return 0; var a=arr.reduce(function(s,e){return s+(parseFloat(e.hours)||0);},0)/arr.length; maxAvg=Math.max(maxAvg,a); return a; });
+    buckets.forEach(function(arr,wd){
+      var row=el("div",{display:"flex",alignItems:"center",gap:"10px",marginBottom:"9px"});
+      row.appendChild(el("div",{fontFamily:"'Oswald',sans-serif",width:"34px",color:C.dim,fontSize:"12px",fontWeight:"600",flexShrink:"0"},WD[wd]));
+      // hours mini-bar
+      var avg=wdAvg[wd];
+      var track=el("div",{flex:"1",height:"18px",background:"#0e0e12",borderRadius:"4px",position:"relative",overflow:"hidden"});
+      var w = maxAvg>0 ? Math.round(avg/maxAvg*100) : 0;
+      var fill=el("div",{height:"100%",width:w+"%",background:"rgba(242,194,0,0.55)",borderRadius:"4px"});
+      track.appendChild(fill);
+      var lbl=el("div",{position:"absolute",left:"7px",top:"1px",fontSize:"11px",color:C.ink,fontWeight:"600"}, arr.length?avg.toFixed(1)+"h":"—");
+      track.appendChild(lbl);
+      row.appendChild(track);
+      // weakest habit that day
+      var weak="—";
+      if(arr.length){
+        var worst=1.1, wname="";
+        habitDefs.forEach(function(hd){ var r=arr.filter(hd[1]).length/arr.length; if(r<worst){worst=r;wname=hd[0];} });
+        weak = worst<=0.5 ? "skips "+wname : "solid";
+      }
+      row.appendChild(el("div",{width:"110px",flexShrink:"0",textAlign:"right",fontSize:"11px",color:weak==="solid"?C.green:(weak==="—"?C.dim:C.red)}, weak));
+      wbox.appendChild(row);
+    });
+    pad.appendChild(wbox);
   }
 
   // MISSES
