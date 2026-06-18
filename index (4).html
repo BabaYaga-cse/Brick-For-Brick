@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>BABA YAGA · Debt to Tomorrow</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: #0a0a0c; font-family: system-ui, -apple-system, sans-serif; color: #e9e9ee; }
+  #root { min-height: 100vh; }
+  a { color: #f2c200; }
+  input, textarea { font-family: inherit; }
+</style>
+</head>
+<body>
+<div id="root">Loading…</div>
+
+<script>
+// ============================================================
+//  Published-to-web CSV link (Form Responses 1 -> CSV)
+// ============================================================
+var CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSQXB7WLGNkUAxG2pPd74G1fWc8e-Kx62Xr_r1naPDxSCnxM2sVx1XbpifF5eL-b7JGPxXbDGd2b57I/pub?gid=312949595&single=true&output=csv";
+var FORM_URL = "https://docs.google.com/forms/d/e/1FAIpQLScxT4m-vxTMTqg00dHiYfMiHrgDjBp6850oyNQEW4hZ5t5Vyw/viewform?embedded=true";
+// ============================================================
+
+var C = { bg:"#0a0a0c", card:"#16161a", line:"#2a2a31", ink:"#e9e9ee", dim:"#7c7c86", gold:"#f2c200", red:"#e0563f", green:"#5fc27e" };
+
+var CHECK_LABELS = {
+  newspaper: "Read the newspaper",
+  answer: "Wrote at least one answer",
+  revision: "Revised old notes",
+  optional: "Did Civil Engg optional",
+};
+
+function todayKey(){ var d=new Date(); return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0"); }
+function dayShiftKey(base, n){ var d=new Date(base+"T00:00:00"); d.setDate(d.getDate()+n); return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0"); }
+function fmt(k){ var d=new Date(k+"T00:00:00"); return isNaN(d)?k:d.toLocaleDateString(undefined,{day:"numeric",month:"short"}); }
+function fmtFull(k){ var d=new Date(k+"T00:00:00"); return isNaN(d)?k:d.toLocaleDateString(undefined,{weekday:"short",day:"numeric",month:"short"}); }
+function yes(v){ return /^(yes|y|true|1|done)$/i.test((v||"").trim()); }
+
+function parseCSV(text){
+  var rows=[], row=[], field="", inQ=false;
+  for(var i=0;i<text.length;i++){
+    var c=text[i];
+    if(inQ){
+      if(c==='"'&&text[i+1]==='"'){ field+='"'; i++; }
+      else if(c==='"'){ inQ=false; }
+      else field+=c;
+    } else {
+      if(c==='"') inQ=true;
+      else if(c===","){ row.push(field); field=""; }
+      else if(c==="\n"){ row.push(field); rows.push(row); row=[]; field=""; }
+      else if(c==="\r"){}
+      else field+=c;
+    }
+  }
+  if(field.length||row.length){ row.push(field); rows.push(row); }
+  return rows;
+}
+function normDate(s){
+  s=(s||"").trim();
+  if(/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  // DD/MM/YYYY or D/M/YYYY  (Google Forms India default)
+  var m=s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+  if(m) return m[3]+"-"+String(m[2]).padStart(2,"0")+"-"+String(m[1]).padStart(2,"0");
+  // YYYY/MM/DD
+  var m2=s.match(/^(\d{4})\/(\d{1,2})\/(\d{1,2})/);
+  if(m2) return m2[1]+"-"+String(m2[2]).padStart(2,"0")+"-"+String(m2[3]).padStart(2,"0");
+  // Fallback: take the calendar parts, not a UTC-shifted Date
+  var d=new Date(s);
+  if(!isNaN(d)) return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0");
+  return s;
+}
+function rowsToEntries(rows){
+  if(!rows.length) return {};
+  var body=rows.slice(1).filter(function(r){ return r.some(function(c){ return c&&c.trim(); }); });
+  var byDate={};
+  body.forEach(function(r){
+    var date=normDate(r[1]); if(!date) return;
+    var taskStr=(r[2]||"").trim();
+    var tasks=taskStr?taskStr.split(",").map(function(t){return {target:t.trim()};}).filter(function(t){return t.target;}):[];
+    var e={ date:date, tasks:tasks, hours:(r[3]||"").trim(),
+      checks:{ newspaper:yes(r[4]), answer:yes(r[5]), revision:yes(r[6]), optional:yes(r[7]) },
+      hardest:yes(r[8]), hardship:yes(r[9]),
+      avoided:(r[10]||"").trim(), redTeam:(r[11]||"").trim(), satisfied:(r[12]||"").trim(),
+      _ts:r[0]||"" };
+    if(!byDate[date] || e._ts > byDate[date]._ts) byDate[date]=e;
+  });
+  return byDate;
+}
+
+// ---------- tiny DOM helpers ----------
+function el(tag, style, children){
+  var n=document.createElement(tag);
+  if(style) for(var k in style) n.style[k]=style[k];
+  if(children!=null){
+    if(!Array.isArray(children)) children=[children];
+    children.forEach(function(c){ if(c==null) return; n.appendChild(typeof c==="string"?document.createTextNode(c):c); });
+  }
+  return n;
+}
+var box={ background:C.card, border:"1px solid "+C.line, borderRadius:"12px", padding:"18px", marginBottom:"14px", boxShadow:"0 1px 3px rgba(0,0,0,0.5)" };
+function btn(label, active, onclick){
+  var b=el("button", { background:active?C.gold:"transparent", color:active?"#000":C.ink,
+    border:"1px solid "+(active?C.gold:C.line), borderRadius:"8px", padding:"9px 16px",
+    fontSize:"13px", fontWeight:"600", cursor:"pointer" }, label);
+  b.onclick=onclick; return b;
+}
+function statBlock(val, label, color){
+  return el("div", null, [
+    el("div", { fontSize:"24px", fontWeight:"800", color:color||C.ink }, String(val)),
+    el("div", { color:C.dim, fontSize:"12px" }, label)
+  ]);
+}
+function checkRow(ok, label, sub){
+  var mark=el("div", { width:"22px", height:"22px", borderRadius:"6px", flexShrink:"0",
+    border:"2px solid "+(ok?C.green:C.line), background:ok?C.green:"transparent",
+    display:"flex", alignItems:"center", justifyContent:"center", color:"#000", fontSize:"14px", fontWeight:"800" }, ok?"✓":"✕");
+  var txt=el("div", null, [
+    el("div", { color:ok?C.ink:C.dim, fontSize:"14px", fontWeight:"600" }, label),
+    sub?el("div", { color:C.dim, fontSize:"12px" }, sub):null
+  ]);
+  return el("div", { display:"flex", alignItems:"center", gap:"12px", padding:"7px 0" }, [mark, txt]);
+}
+function noteBlock(tag, text, color){
+  var b=el("div", { marginTop:"8px", padding:"8px 10px", background:"#0e0e12", borderRadius:"8px",
+    fontSize:"13px", borderLeft:"3px solid "+color }, [
+    el("span", { color:C.dim, fontSize:"11px", fontWeight:"700" }, tag+" · "), text ]);
+  return b;
+}
+
+// ---------- inline SVG chart (bars + 7-day avg line) ----------
+function buildChart(data){
+  var W=600, H=280, padL=34, padB=28, padT=10, padR=8;
+  var iw=W-padL-padR, ih=H-padT-padB;
+  var maxH=Math.max(1, Math.max.apply(null, data.map(function(d){return Math.max(d.hrs,d.avg);})));
+  var ymax=Math.ceil(maxH/2)*2 || 2;
+  var n=data.length;
+  var svgNS="http://www.w3.org/2000/svg";
+  var svg=document.createElementNS(svgNS,"svg");
+  svg.setAttribute("viewBox","0 0 "+W+" "+H);
+  svg.setAttribute("width","100%"); svg.setAttribute("height","280");
+  function X(i){ return padL + (n<=1? iw/2 : (iw*i/(n-1))); }
+  function Y(v){ return padT + ih - (v/ymax)*ih; }
+  // gridlines + y labels
+  for(var g=0; g<=ymax; g+=2){
+    var y=Y(g);
+    var ln=document.createElementNS(svgNS,"line");
+    ln.setAttribute("x1",padL); ln.setAttribute("x2",W-padR); ln.setAttribute("y1",y); ln.setAttribute("y2",y);
+    ln.setAttribute("stroke",C.line); ln.setAttribute("stroke-width","1"); svg.appendChild(ln);
+    var tx=document.createElementNS(svgNS,"text");
+    tx.setAttribute("x",padL-6); tx.setAttribute("y",y+3); tx.setAttribute("fill",C.dim);
+    tx.setAttribute("font-size","10"); tx.setAttribute("text-anchor","end"); tx.textContent=g; svg.appendChild(tx);
+  }
+  // bars
+  var bw=Math.max(4, Math.min(20, iw/Math.max(n,1)*0.5));
+  data.forEach(function(d,i){
+    var x=X(i)-bw/2, y=Y(d.hrs), h=padT+ih-y;
+    var rect=document.createElementNS(svgNS,"rect");
+    rect.setAttribute("x",x); rect.setAttribute("y",y); rect.setAttribute("width",bw);
+    rect.setAttribute("height",Math.max(0,h)); rect.setAttribute("rx","3"); rect.setAttribute("fill",C.gold);
+    svg.appendChild(rect);
+    if(i%Math.ceil(n/8||1)===0 || i===n-1){
+      var lbl=document.createElementNS(svgNS,"text");
+      lbl.setAttribute("x",X(i)); lbl.setAttribute("y",H-8); lbl.setAttribute("fill",C.dim);
+      lbl.setAttribute("font-size","9"); lbl.setAttribute("text-anchor","middle"); lbl.textContent=d.date;
+      svg.appendChild(lbl);
+    }
+  });
+  // avg line
+  if(n>1){
+    var pts=data.map(function(d,i){ return X(i)+","+Y(d.avg); }).join(" ");
+    var pl=document.createElementNS(svgNS,"polyline");
+    pl.setAttribute("points",pts); pl.setAttribute("fill","none"); pl.setAttribute("stroke",C.green);
+    pl.setAttribute("stroke-width","2.5"); svg.appendChild(pl);
+  }
+  return svg;
+}
+
+// ---------- app state + render ----------
+var state={ entries:{}, status:"loading", tab:"today", tk:todayKey() };
+var root=document.getElementById("root");
+
+function load(){
+  if(!CSV_URL){ state.status="nourl"; render(); return; }
+  state.status="loading"; render();
+  fetch(CSV_URL + (CSV_URL.indexOf("?")>=0?"&":"?") + "t=" + Date.now())
+    .then(function(r){ return r.text(); })
+    .then(function(txt){ state.entries=rowsToEntries(parseCSV(txt)); state.status="ok"; render(); })
+    .catch(function(){ state.status="error"; render(); });
+}
+function shiftDay(n){ state.tk=dayShiftKey(state.tk, n); render(); }
+
+function render(){
+  root.innerHTML="";
+  var wrap=el("div", { maxWidth:"640px", margin:"0 auto", paddingBottom:"22px" });
+
+  // header
+  var head=el("div", { padding:"24px 18px 20px", textAlign:"center", borderBottom:"1px solid "+C.line });
+  head.appendChild(el("div", { fontSize:"40px", lineHeight:"1", marginBottom:"6px" }, "🦇"));
+  head.appendChild(el("div", { letterSpacing:"5px", color:C.gold, fontSize:"11px", fontWeight:"800" }, "BABA YAGA"));
+  var q=el("div", { fontSize:"16px", fontWeight:"600", marginTop:"12px", lineHeight:"1.6", color:C.ink, fontStyle:"italic" });
+  q.innerHTML='<span style="color:'+C.dim+'">“What will you do?”</span><br/>“Rebuild it. Just the way it was — brick for brick.”';
+  head.appendChild(q);
+  wrap.appendChild(head);
+
+  // tabs
+  var tabs=el("div", { display:"flex", borderBottom:"1px solid "+C.line, margin:"0 0 14px" });
+  [["today","Day"],["log","Log"],["stats","Stats"],["misses","Misses"]].forEach(function(t){
+    var on=state.tab===t[0];
+    var b=el("button", { flex:"1", padding:"10px 4px", fontSize:"13px", fontWeight:"600", cursor:"pointer",
+      background:on?C.card:"transparent", color:on?C.gold:C.dim, border:"none",
+      borderBottom:"2px solid "+(on?C.gold:"transparent") }, t[1]);
+    b.onclick=function(){ state.tab=t[0]; render(); };
+    tabs.appendChild(b);
+  });
+  wrap.appendChild(tabs);
+
+  var pad=el("div", { padding:"0 18px" });
+  wrap.appendChild(pad);
+
+  // derived
+  var sorted=Object.keys(state.entries).map(function(k){return state.entries[k];}).sort(function(a,b){return a.date.localeCompare(b.date);});
+  var hardestCount=sorted.filter(function(e){return e.hardest;}).length;
+  var total=sorted.length;
+  var totalHours=sorted.reduce(function(s,e){return s+(parseFloat(e.hours)||0);},0);
+  var chartData=sorted.map(function(e,i){
+    var w=sorted.slice(Math.max(0,i-6),i+1);
+    var avg=w.reduce(function(s,x){return s+(parseFloat(x.hours)||0);},0)/w.length;
+    return { date:fmt(e.date), hrs:parseFloat(e.hours)||0, avg:Math.round(avg*10)/10 };
+  });
+
+  // LOG tab (always works)
+  if(state.tab==="log"){
+    pad.style.padding="0 6px";
+    var fbox=el("div", { background:"#fff", borderRadius:"10px", marginBottom:"10px", overflow:"hidden" });
+    var iframe=el("iframe");
+    iframe.src=FORM_URL;
+    iframe.style.width="100%"; iframe.style.height="calc(100vh - 130px)"; iframe.style.minHeight="600px";
+    iframe.style.border="none"; iframe.style.background="#fff"; iframe.style.display="block";
+    iframe.setAttribute("scrolling","yes");
+    fbox.appendChild(iframe);
+    pad.appendChild(fbox);
+    var refresh=el("div", { textAlign:"center", marginBottom:"10px" }, [ btn("Submitted? ↻ Refresh dashboard", true, function(){ state.tab="today"; load(); }) ]);
+    pad.appendChild(refresh);
+    finish(); return;
+  }
+
+  if(state.status==="error"){
+    pad.appendChild(el("div", box, [ el("div",{color:C.red,fontSize:"14px"},"Couldn't load the sheet. Check it's published to web as CSV.") ]));
+    finish(); return;
+  }
+  if(state.status==="loading"){
+    pad.appendChild(el("div", box, [ el("div",{color:C.dim,fontSize:"14px"},"Loading from your sheet…") ]));
+    finish(); return;
+  }
+
+  // DAY
+  if(state.tab==="today"){
+    var stats=el("div", { background:C.card, border:"1px solid "+C.line, borderRadius:"12px", padding:"18px", marginBottom:"14px", display:"flex", gap:"24px", flexWrap:"wrap" }, [
+      statBlock(hardestCount,"hard things done",C.green),
+      statBlock(total,"days logged"),
+      statBlock((total?Math.round(hardestCount/total*100):0)+"%","hit rate",C.gold),
+      statBlock(totalHours.toFixed(1),"total hrs")
+    ]);
+    pad.appendChild(stats);
+
+    var nav=el("div", { background:C.card, border:"1px solid "+C.line, borderRadius:"12px", padding:"10px 14px", marginBottom:"14px", display:"flex", alignItems:"center", justifyContent:"space-between" });
+    nav.appendChild(btn("‹ Prev", false, function(){ shiftDay(-1); }));
+    var isToday=state.tk===todayKey();
+    var center=el("div", { textAlign:"center" }, [ el("div",{fontSize:"14px",fontWeight:"700"},fmtFull(state.tk)) ]);
+    if(!isToday){ var jt=el("div",{fontSize:"11px",color:C.gold,cursor:"pointer"},"jump to today"); jt.onclick=function(){state.tk=todayKey();render();}; center.appendChild(jt); }
+    nav.appendChild(center);
+    var nb=btn("Next ›", false, function(){ if(!isToday) shiftDay(1); });
+    if(isToday) nb.style.opacity="0.35";
+    nav.appendChild(nb);
+    pad.appendChild(nav);
+
+    var sel=state.entries[state.tk]||null;
+    var dbox=el("div", box);
+    if(sel){
+      dbox.appendChild(el("div",{fontSize:"12px",color:C.dim,marginBottom:"4px"},"Debts paid this day"));
+      if(sel.tasks.length) sel.tasks.forEach(function(t){ dbox.appendChild(checkRow(true,t.target)); });
+      else dbox.appendChild(el("div",{color:C.dim,fontSize:"13px"},"No tasks recorded."));
+      dbox.appendChild(el("div",{height:"8px",borderTop:"1px solid "+C.line,margin:"8px 0"}));
+      dbox.appendChild(checkRow(sel.hardest,"Did the thing I least wanted, most needed","the only metric that matters"));
+      dbox.appendChild(checkRow(sel.hardship,"Daily voluntary hardship"));
+      if(sel.hours) dbox.appendChild(el("div",{marginTop:"8px",color:C.dim,fontSize:"13px"},[ "Hours studied: ", el("b",{color:C.ink},sel.hours) ]));
+      if(sel.satisfied) dbox.appendChild(el("div",{marginTop:"4px",color:C.dim,fontSize:"13px"},[ "Satisfied with today: ", el("b",{color:C.ink},sel.satisfied) ]));
+      if(sel.avoided) dbox.appendChild(noteBlock("AVOIDED",sel.avoided,C.red));
+      if(sel.redTeam) dbox.appendChild(noteBlock("RED-TEAM",sel.redTeam,C.gold));
+    } else {
+      dbox.appendChild(el("div",{color:C.dim,fontSize:"14px"},"Nothing logged for "+fmtFull(state.tk)+". Submit the form for this date and refresh."));
+    }
+    pad.appendChild(dbox);
+    pad.appendChild(el("div",{textAlign:"center",marginTop:"4px"},[ btn("↻ Refresh from sheet", true, load) ]));
+  }
+
+  // STATS
+  if(state.tab==="stats"){
+    var cbox=el("div", box);
+    cbox.appendChild(el("div",{fontSize:"13px",color:C.gold,fontWeight:"700",marginBottom:"4px"},"STUDY HOURS"));
+    cbox.appendChild(el("div",{color:C.dim,fontSize:"12px",marginBottom:"10px"},"Bars = hours per day · Line = 7-day rolling average"));
+    if(chartData.length===0) cbox.appendChild(el("div",{color:C.dim,fontSize:"14px",padding:"20px 0"},"No data yet."));
+    else cbox.appendChild(buildChart(chartData));
+    pad.appendChild(cbox);
+    pad.appendChild(el("div",{background:C.card,border:"1px solid "+C.line,borderRadius:"12px",padding:"18px",marginBottom:"14px",display:"flex",gap:"24px",flexWrap:"wrap"},[
+      statBlock(totalHours.toFixed(1),"total hours",C.gold),
+      statBlock(chartData.length?(totalHours/chartData.length).toFixed(1):0,"daily avg"),
+      statBlock(chartData.length?chartData[chartData.length-1].avg:0,"current 7-day avg",C.green)
+    ]));
+  }
+
+  // MISSES
+  if(state.tab==="misses"){
+    var misses=sorted.map(function(e){
+      var m=[];
+      Object.keys(CHECK_LABELS).forEach(function(id){ if(!e.checks[id]) m.push(CHECK_LABELS[id]); });
+      if(!e.hardest) m.push("Skipped the hard thing");
+      if(!e.hardship) m.push("No voluntary hardship");
+      return { date:e.date, misses:m, avoided:e.avoided };
+    }).filter(function(x){return x.misses.length||x.avoided;}).sort(function(a,b){return b.date.localeCompare(a.date);});
+    if(misses.length===0) pad.appendChild(el("div",box,[ el("div",{color:C.dim,fontSize:"14px"},"Nothing logged as missed yet.") ]));
+    else misses.forEach(function(d){
+      var mb=el("div", box);
+      mb.appendChild(el("div",{fontSize:"13px",color:C.gold,fontWeight:"700",marginBottom:"8px"},fmtFull(d.date)));
+      d.misses.forEach(function(m){
+        mb.appendChild(el("div",{display:"flex",gap:"8px",alignItems:"flex-start",padding:"3px 0"},[
+          el("span",{color:C.red,fontWeight:"800",fontSize:"14px"},"✕"), el("span",{fontSize:"13px"},m) ]));
+      });
+      if(d.avoided) mb.appendChild(noteBlock("AVOIDED",d.avoided,C.red));
+      pad.appendChild(mb);
+    });
+  }
+
+  finish();
+  function finish(){
+    pad.appendChild(el("div",{color:C.dim,fontSize:"11px",textAlign:"center",marginTop:"6px"},"Relentlessness is not intensity. It is moving when nothing feels rewarding."));
+    document.body.style.background=C.bg;
+    root.appendChild(wrap);
+  }
+}
+
+load();
+</script>
+</body>
+</html>
